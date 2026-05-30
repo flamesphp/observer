@@ -1,0 +1,9 @@
+{
+  "name": "flamesphp/observer",
+  "description": "Flames: Observer",
+  "type": "library",
+  "license": "MIT",
+  "require": {
+    "php": ">=8.5"
+  }
+}
