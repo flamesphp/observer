@@ -13,7 +13,7 @@ namespace Flames\Observer;
  *   A JSON file is written to sys_get_temp_dir() whenever the hash changes.
  *   The filename is derived from the application root path using the same
  *   sanitisation rule as the C extension's shared-memory name:
- *     fo_<sanitised_root>.observer.service.dat
+ *     {cache}/flames/observer/app/<sha1('state.json')>
  *   Both the observer process and any external PHP process must resolve to
  *   the same root path for cross-process calls to succeed.
  *
@@ -131,12 +131,27 @@ final class App
     }
 
     /**
-     * Path to the file that persists the last onChange hash across restarts.
+     * Read the hash persisted in the state file from a previous run.
      * @internal
      */
-    public static function _hashCacheFile(): string
+    public static function _readPersistedHash(): ?string
     {
-        return self::_cacheDir() . sha1('app');
+        $file = self::_stateFile();
+        if (!is_file($file)) {
+            return null;
+        }
+
+        $raw = @file_get_contents($file);
+        if ($raw === false || $raw === '') {
+            return null;
+        }
+
+        $data = @json_decode($raw, true);
+        if (!is_array($data) || empty($data['ready']) || !isset($data['hash'])) {
+            return null;
+        }
+
+        return (string) $data['hash'];
     }
 
     // ── Internal helpers (used by \Flames\Observer\App\Register) ──
@@ -157,23 +172,21 @@ final class App
     }
 
     /**
-     * Path to the shared state file in the system temp directory.
+     * Path to the shared state file (current hash, readable cross-process).
      *
-     * The sanitisation rule matches the C extension's SHM naming convention
-     * (characters outside [a-zA-Z0-9._-] replaced with '_'):
-     *   <tmp>/fo_<sanitised_root>.observer.service.dat
-     *
-     * Note: the C extension uses OS-level shared memory (POSIX shm_open on
-     * Linux/macOS, named file mappings on Windows). The PHP fallback uses a
-     * regular file in tmp as a portable equivalent — they are not interchangeable.
+     * When a cache path is configured: {cache}/flames/observer/app/<sha1('state.json')>
+     * Fallback (no cache path):        {tmp}/<sha1('state.json')>.{project}
      *
      * @internal
      */
     public static function _stateFile(): string
     {
-        $root = self::_root();
-        $safe = preg_replace('/[^a-zA-Z0-9.\-]/', '_', $root);
-        return self::_cacheDir() . 'fo_' . $safe . '.observer.service.dat';
+        if (self::$cachePathOverride !== null) {
+            return self::_cacheDir() . sha1('state.json');
+        }
+
+        $safe = preg_replace('/[^a-zA-Z0-9._-]/', '_', basename(self::_root()) ?: 'app');
+        return self::_cacheDir() . sha1('state.json') . '.' . $safe;
     }
 
     /**
