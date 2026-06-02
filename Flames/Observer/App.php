@@ -38,6 +38,9 @@ final class App
     /** Explicit root override (PHP-only – not needed with the C extension). */
     private static ?string $rootOverride = null;
 
+    /** Override for the cache directory (state file + hash cache). */
+    private static ?string $cachePathOverride = null;
+
     // ── Public API (identical to C extension) ──────────────────────────────
 
     public static function setPaths(array $paths): void
@@ -104,6 +107,38 @@ final class App
         self::$rootOverride = rtrim($root, '/\\');
     }
 
+    /**
+     * Set the directory used for the state file and the onChange hash cache.
+     * Call this before Register::change() with a writable path.
+     */
+    public static function setCachePath(string $path): void
+    {
+        self::$cachePathOverride = rtrim($path, '/') . '/';
+    }
+
+    /** @internal */
+    public static function _cacheDir(): string
+    {
+        if (self::$cachePathOverride !== null) {
+            if (!is_dir(self::$cachePathOverride)) {
+                $mask = umask(0);
+                mkdir(self::$cachePathOverride, 0777, true);
+                umask($mask);
+            }
+            return self::$cachePathOverride;
+        }
+        return sys_get_temp_dir() . DIRECTORY_SEPARATOR;
+    }
+
+    /**
+     * Path to the file that persists the last onChange hash across restarts.
+     * @internal
+     */
+    public static function _hashCacheFile(): string
+    {
+        return self::_cacheDir() . sha1('app');
+    }
+
     // ── Internal helpers (used by \Flames\Observer\App\Register) ──
 
     /** @internal */
@@ -138,7 +173,7 @@ final class App
     {
         $root = self::_root();
         $safe = preg_replace('/[^a-zA-Z0-9.\-]/', '_', $root);
-        return sys_get_temp_dir() . DIRECTORY_SEPARATOR . 'fo_' . $safe . '.observer.service.dat';
+        return self::_cacheDir() . 'fo_' . $safe . '.observer.service.dat';
     }
 
     /**
@@ -211,7 +246,11 @@ final class App
     {
         self::$currentHash = $hash;
 
+        $file    = self::_stateFile();
         $payload = json_encode(['ready' => true, 'hash' => $hash]);
-        @file_put_contents(self::_stateFile(), $payload, LOCK_EX);
+
+        $mask = umask(0);
+        file_put_contents($file, $payload, LOCK_EX);
+        umask($mask);
     }
 }

@@ -36,27 +36,46 @@ final class Register
      * Override before calling this method:
      *   ini_set('flames_observer_service.interval', '100');
      */
-    public static function change(callable $callback): void
+    public static function change(callable $callback, ?int $timeoutSeconds = null): void
     {
         $interval = self::resolveInterval();
+        $deadline = $timeoutSeconds !== null ? time() + $timeoutSeconds : null;
 
-        // ── Initial scan ─────────────────────────────────────────────────
+        // ── Load hash persisted from previous run ─────────────────────────
+        $cacheFile  = ObserverService::_hashCacheFile();
+        $cachedHash = is_file($cacheFile) ? trim((string) file_get_contents($cacheFile)) : null;
+
+        // ── Initial scan ──────────────────────────────────────────────────
         $prev = ObserverService::_scan();
         $hash = ObserverService::_computeHash($prev);
         ObserverService::_writeState($hash);
+        self::writeCacheFile($cacheFile, $hash);
 
         fwrite(STDERR, sprintf(
-            "[Flames Observer] started (PHP) – paths=%d, interval=%dms, "
-            . "state=%s\n"
+            "[Flames Observer] started (PHP) – paths=%d, interval=%dms\n"
+            . "[Flames Observer] cache dir=%s\n"
+            . "[Flames Observer] hash file=%s\n"
+            . "[Flames Observer] state file=%s\n"
             . "[Flames Observer] initial hash=%s\n",
             count(ObserverService::getPaths()),
             $interval,
+            ObserverService::_cacheDir(),
+            $cacheFile,
             ObserverService::_stateFile(),
             $hash
         ));
 
+        // ── Trigger if files changed while observer was stopped ───────────
+        if ($cachedHash !== null && $cachedHash !== $hash) {
+            fwrite(STDERR, sprintf(
+                "[Flames Observer] stale hash detected (%s → %s) – triggering change\n",
+                $cachedHash, $hash
+            ));
+            $callback($hash);
+        }
+
         // ── Observer loop ─────────────────────────────────────────────────
-        while (true) {
+        while ($deadline === null || time() < $deadline) {
             usleep($interval * 1000);
 
             // Re-read interval each cycle so ini_set changes take effect
@@ -67,6 +86,7 @@ final class Register
             if ($curr !== $prev) {
                 $hash = ObserverService::_computeHash($curr);
                 ObserverService::_writeState($hash);
+                self::writeCacheFile($cacheFile, $hash);
 
                 fwrite(STDERR, sprintf(
                     "[Flames Observer] change detected – hash=%s\n", $hash));
@@ -79,6 +99,20 @@ final class Register
     }
 
     // ── Private helpers ────────────────────────────────────────────────────
+
+    private static function writeCacheFile(string $path, string $hash): void
+    {
+        $dir = dirname($path);
+        if (!is_dir($dir)) {
+            $mask = umask(0);
+            mkdir($dir, 0777, true);
+            umask($mask);
+        }
+
+        $mask = umask(0);
+        file_put_contents($path, $hash, LOCK_EX);
+        umask($mask);
+    }
 
     private static function resolveInterval(): int
     {
