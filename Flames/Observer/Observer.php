@@ -29,12 +29,9 @@ final class Observer
         }
     }
 
-    private mixed $_value = null;
-
-    public function __construct(mixed $initialValue, callable $delegate)
+    public function __construct(private mixed $_value, callable $delegate)
     {
         $this->delegate = $delegate;
-        $this->_value   = $initialValue;
     }
 
     /** Factory — the ::watch() call is the marker detected by TokenTransformer. */
